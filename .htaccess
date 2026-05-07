@@ -1,0 +1,19 @@
+Options -Indexes
+Options +FollowSymLinks
+
+RewriteEngine On
+RewriteBase /smart_home/
+
+# ── Block direct access to sensitive directories ──
+RewriteRule ^(config|models|controllers|database|uploads)(/|$) - [F,L]
+
+# ── Let real files and directories pass through ───
+RewriteCond %{REQUEST_FILENAME} -f [OR]
+RewriteCond %{REQUEST_FILENAME} -d
+RewriteRule ^ - [L]
+
+# ── Let API calls go directly ─────────────────────
+RewriteRule ^api/(.+)$ api/$1 [L,QSA]
+
+# ── Route everything else to the front controller ─
+RewriteRule ^(.*)$ index.php [L,QSA]
