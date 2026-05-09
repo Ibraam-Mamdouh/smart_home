@@ -12,25 +12,34 @@
         h2 { font-size: 1.1rem; font-weight: 700; color: #2d3748; margin: 24px 0 12px; padding-bottom: 6px; border-bottom: 1px solid #e2e8f0; }
         .kpi-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 24px; }
         .kpi { background: #f7fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 16px 20px; }
-        .kpi .label { font-size: .7rem; text-transform: uppercase; letter-spacing: .05em; color: #718096; }
+        .kpi .label { font-size: .7rem; text-transform: uppercase; letter-spacing: .05em; color: #718096; margin-bottom: 6px; }
         .kpi .value { font-size: 1.8rem; font-weight: 800; color: #2d3748; }
         table { width: 100%; border-collapse: collapse; font-size: .83rem; }
         thead th { background: #f7fafc; padding: 8px 12px; text-align: left; font-size: .72rem; text-transform: uppercase; color: #718096; border-bottom: 1px solid #e2e8f0; }
         tbody td { padding: 8px 12px; border-bottom: 1px solid #f0f4f8; }
         tbody tr:nth-child(even) { background: #f7fafc; }
         .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: .7rem; font-weight: 600; }
-        .badge-elec { background: #fefcbf; color: #92400e; }
+        .badge-elec  { background: #fefcbf; color: #92400e; }
         .badge-water { background: #e0f2fe; color: #075985; }
-        .badge-gas  { background: #fff7ed; color: #9a3412; }
+        .badge-gas   { background: #fff7ed; color: #9a3412; }
         .footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #e2e8f0; font-size: .72rem; color: #a0aec0; text-align: center; }
-        @media print {
-            body { padding: 20px; }
-            button { display: none; }
-        }
+        @media print { body { padding: 20px; } button { display: none; } }
     </style>
 </head>
 <body>
-
+<?php
+// ── Safety: fetch CO₂ directly inside the template ──────────────
+// This ensures the correct value is always shown regardless of
+// which variable name the calling controller used ($co2 vs $co2Today).
+if (empty($co2Today) || (float)$co2Today === 0.0) {
+    if (!class_exists('Telemetry')) {
+        require_once ROOT_PATH . '/models/Telemetry.php';
+    }
+    $co2Today = (new Telemetry())->carbonFootprintToday();
+}
+// Final fallback: if still 0 (no data today), use demo value for display
+$co2Display = (float)$co2Today > 0 ? $co2Today : 0.0;
+?>
 <div class="header">
     <div>
         <div class="logo">⚡ SmartHome</div>
@@ -47,15 +56,24 @@
 <div class="kpi-row">
     <div class="kpi">
         <div class="label">Forecast Bill</div>
-        <div class="value" style="color:#d97706"><?= number_format($forecast['forecast_egp'], 2) ?> <span style="font-size:1rem">EGP</span></div>
+        <div class="value" style="color:#d97706">
+            <?= number_format((float)($forecast['forecast_egp'] ?? 0), 2) ?>
+            <span style="font-size:1rem">EGP</span>
+        </div>
     </div>
     <div class="kpi">
         <div class="label">Avg Daily Usage</div>
-        <div class="value" style="color:#059669"><?= number_format($forecast['avg_daily_kwh'], 3) ?> <span style="font-size:1rem">kWh</span></div>
+        <div class="value" style="color:#059669">
+            <?= number_format((float)($forecast['avg_daily_kwh'] ?? 0), 3) ?>
+            <span style="font-size:1rem">kWh</span>
+        </div>
     </div>
     <div class="kpi">
         <div class="label">CO₂ Today</div>
-        <div class="value" style="color:#7c3aed"><?= number_format($co2Today, 3) ?> <span style="font-size:1rem">kg</span></div>
+        <div class="value" style="color:#7c3aed">
+            <?= number_format($co2Display, 3) ?>
+            <span style="font-size:1rem">kg</span>
+        </div>
     </div>
 </div>
 

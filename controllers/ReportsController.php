@@ -95,7 +95,7 @@ class ReportsController extends BaseController
         $forecast = $tel->predictMonthlyBill($uid);
         $budgets  = $bud->dashboardSummary($uid);
         $weekly   = $tel->weeklySummary();
-        $co2      = $tel->carbonFootprintToday();
+        $co2Today = $tel->carbonFootprintToday();
         $user     = $this->currentUser;
 
         // Simple HTML→PDF via browser print; a real deployment would use TCPDF or mPDF

@@ -123,10 +123,17 @@ class Telemetry
         );
 
         $total = 0.0;
+        $prev  = null;
         foreach ($rows as $r) {
-            // Convert W to kWh for the interval (assuming ~5s interval)
-            $kwh    = ($r['value'] / 1000) * (5 / 3600);
+            if ($prev !== null) {
+                // Actual seconds between this reading and the previous one
+                $intervalHours = (strtotime($r['recorded_at']) - strtotime($prev['recorded_at'])) / 3600;
+            } else {
+                $intervalHours = 0.5; // assume 30-min slot for first reading
+            }
+            $kwh    = ($r['value'] / 1000) * $intervalHours;
             $total += $kwh * $this->tariffRate($r['recorded_at']);
+            $prev   = $r;
         }
         return round($total, 4);
     }
@@ -135,36 +142,49 @@ class Telemetry
 
     /**
      * P = ((Σ U_i / 7) × D_remaining) + U_current
+     *
+     * Uses AVG(watts) × hours_per_day instead of SUM × fixed_interval
+     * so it works correctly regardless of recording frequency.
      */
     public function predictMonthlyBill(int $userId): array
     {
+        // Average kWh per day over last 7 days
+        // For each day: AVG(W)/1000 × actual_hours_span
         $dailyAvg = $this->db->fetchOne(
-            'SELECT AVG(daily_total) AS avg_day
+            'SELECT AVG(daily_kwh) AS avg_day
              FROM (
-                 SELECT DATE(t.recorded_at) AS d,
-                        SUM((t.value/1000)*(5/3600)) AS daily_total
-                 FROM telemetry_logs t
-                 JOIN appliances a ON a.id = t.device_id
-                 WHERE t.recorded_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
-                 GROUP BY DATE(t.recorded_at)
+                 SELECT DATE(recorded_at) AS d,
+                        AVG(value) / 1000
+                        * (TIMESTAMPDIFF(SECOND, MIN(recorded_at), MAX(recorded_at)) / 3600 + 0.5)
+                        AS daily_kwh
+                 FROM telemetry_logs
+                 WHERE recorded_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+                 GROUP BY DATE(recorded_at)
+                 HAVING COUNT(*) > 0
              ) AS sub',
             []
         );
 
+        // kWh used so far this month
         $currentKwh = $this->db->fetchOne(
-            'SELECT COALESCE(SUM((t.value/1000)*(5/3600)), 0) AS kwh
-             FROM telemetry_logs t
-             WHERE t.recorded_at >= DATE_FORMAT(NOW(), \'%Y-%m-01\')',
+            'SELECT COALESCE(
+                 AVG(value) / 1000
+                 * (TIMESTAMPDIFF(SECOND, MIN(recorded_at), MAX(recorded_at)) / 3600 + 0.5),
+             0) AS kwh
+             FROM telemetry_logs
+             WHERE recorded_at >= DATE_FORMAT(NOW(), \'%Y-%m-01\')
+             HAVING COUNT(*) > 0',
             []
         );
 
-        $dayOfMonth    = (int)date('j');
-        $daysInMonth   = (int)date('t');
-        $dRemaining    = $daysInMonth - $dayOfMonth;
-        $avgDay        = (float)($dailyAvg['avg_day'] ?? 0);
-        $current       = (float)($currentKwh['kwh']   ?? 0);
-        $forecast_kwh  = ($avgDay * $dRemaining) + $current;
-        $forecast_egp  = round($forecast_kwh * TARIFF_PEAK, 2);
+        $dayOfMonth   = (int)date('j');
+        $daysInMonth  = (int)date('t');
+        $dRemaining   = $daysInMonth - $dayOfMonth;
+        $avgDay       = (float)($dailyAvg['avg_day']  ?? 0);
+        $current      = (float)($currentKwh['kwh']    ?? 0);
+        $forecast_kwh = ($avgDay * $dRemaining) + $current;
+        $averageTariff = (TARIFF_PEAK + TARIFF_OFFPEAK) / 2;
+        $forecast_egp = round($forecast_kwh * $averageTariff, 2);
 
         return [
             'avg_daily_kwh'  => round($avgDay, 4),
@@ -208,12 +228,16 @@ class Telemetry
         return $this->db->fetchAll(
             'SELECT a.name AS device_name,
                     t.resource_type,
-                    SUM((t.value/1000)*(5/3600)) AS kwh,
-                    COUNT(*)                      AS readings
+                    ROUND(
+                        AVG(t.value) / 1000
+                        * (TIMESTAMPDIFF(SECOND, MIN(t.recorded_at), MAX(t.recorded_at)) / 3600 + 0.5),
+                    4) AS kwh,
+                    COUNT(*) AS readings
              FROM telemetry_logs t
              JOIN appliances a ON a.id = t.device_id
              WHERE DATE(t.recorded_at) = ?
              GROUP BY t.device_id, a.name, t.resource_type
+             HAVING COUNT(*) > 0
              ORDER BY kwh DESC',
             [$date]
         );
@@ -224,10 +248,14 @@ class Telemetry
         return $this->db->fetchAll(
             'SELECT DATE(recorded_at) AS day,
                     resource_type,
-                    ROUND(SUM((value/1000)*(5/3600)), 4) AS kwh
+                    ROUND(
+                        AVG(value) / 1000
+                        * (TIMESTAMPDIFF(SECOND, MIN(recorded_at), MAX(recorded_at)) / 3600 + 0.5),
+                    4) AS kwh
              FROM telemetry_logs
              WHERE recorded_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
              GROUP BY DATE(recorded_at), resource_type
+             HAVING COUNT(*) > 0
              ORDER BY day ASC'
         );
     }
@@ -236,11 +264,15 @@ class Telemetry
     {
         return $this->db->fetchAll(
             'SELECT resource_type,
-                    ROUND(SUM((value/1000)*(5/3600)), 4) AS kwh,
-                    COUNT(DISTINCT device_id)            AS devices
+                    ROUND(
+                        AVG(value) / 1000
+                        * (TIMESTAMPDIFF(SECOND, MIN(recorded_at), MAX(recorded_at)) / 3600 + 0.5),
+                    4) AS kwh,
+                    COUNT(DISTINCT device_id) AS devices
              FROM telemetry_logs
              WHERE recorded_at >= DATE_FORMAT(NOW(), \'%Y-%m-01\')
-             GROUP BY resource_type'
+             GROUP BY resource_type
+             HAVING COUNT(*) > 0'
         );
     }
 
@@ -248,16 +280,37 @@ class Telemetry
 
     /**
      * CO2_Total = Σ(Usage_resource × EmissionFactor_resource)
+     * Falls back to most recent day with data if today has none.
      */
     public function carbonFootprintToday(): float
     {
+        // Try today first
         $rows = $this->db->fetchAll(
             'SELECT resource_type,
-                    SUM((value/1000)*(5/3600)) AS kwh
+                    AVG(value) / 1000
+                    * (TIMESTAMPDIFF(SECOND, MIN(recorded_at), MAX(recorded_at)) / 3600 + 0.5)
+                    AS kwh
              FROM telemetry_logs
              WHERE DATE(recorded_at) = CURDATE()
-             GROUP BY resource_type'
+             GROUP BY resource_type
+             HAVING COUNT(*) > 0'
         );
+
+        // Fall back to most recent day that has readings
+        if (empty($rows)) {
+            $rows = $this->db->fetchAll(
+                'SELECT resource_type,
+                        AVG(value) / 1000
+                        * (TIMESTAMPDIFF(SECOND, MIN(recorded_at), MAX(recorded_at)) / 3600 + 0.5)
+                        AS kwh
+                 FROM telemetry_logs
+                 WHERE DATE(recorded_at) = (
+                     SELECT DATE(MAX(recorded_at)) FROM telemetry_logs
+                 )
+                 GROUP BY resource_type
+                 HAVING COUNT(*) > 0'
+            );
+        }
 
         $factors = [
             'electricity' => EMISSION_ELECTRICITY,
@@ -267,7 +320,7 @@ class Telemetry
 
         $co2 = 0.0;
         foreach ($rows as $r) {
-            $co2 += $r['kwh'] * ($factors[$r['resource_type']] ?? 0);
+            $co2 += max(0, (float)$r['kwh']) * ($factors[$r['resource_type']] ?? 0);
         }
         return round($co2, 4);
     }

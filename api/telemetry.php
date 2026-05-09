@@ -48,12 +48,12 @@ try {
 
             foreach ($rows as $r) {
                 if (!in_array($r['day'], $labels, true)) $labels[] = $r['day'];
-                match($r['resource_type']) {
-                    'electricity' => $elec[$r['day']]  = (float)$r['kwh'],
-                    'water'       => $water[$r['day']] = (float)$r['kwh'],
-                    'gas'         => $gas[$r['day']]   = (float)$r['kwh'],
-                    default       => null,
-                };
+                $kwh = (float)$r['kwh'];
+                switch ($r['resource_type']) {
+                    case 'electricity': $elec[$r['day']]  = $kwh; break;
+                    case 'water':       $water[$r['day']] = $kwh; break;
+                    case 'gas':         $gas[$r['day']]   = $kwh; break;
+                }
             }
             sort($labels);
 

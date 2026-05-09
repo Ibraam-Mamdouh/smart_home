@@ -149,39 +149,137 @@
 </div>
 
 <script>
-Chart.defaults.color='#4a5568';
-Chart.defaults.font.family="system-ui,-apple-system,'Segoe UI',sans-serif";
-Chart.defaults.font.size=11;
+Chart.defaults.color       = '#4a5568';
+Chart.defaults.font.family = "system-ui,-apple-system,'Segoe UI',sans-serif";
+Chart.defaults.font.size   = 11;
 
-const DEMO_L=(function(){const d=[];const n=new Date();for(let i=6;i>=0;i--){const t=new Date(n);t.setDate(n.getDate()-i);d.push(t.toLocaleDateString('en-EG',{month:'short',day:'numeric'}));}return d;})();
+const DEMO_L = (function(){
+    const d=[], n=new Date();
+    for(let i=6;i>=0;i--){
+        const t=new Date(n); t.setDate(n.getDate()-i);
+        d.push(t.toLocaleDateString('en-EG',{month:'short',day:'numeric'}));
+    }
+    return d;
+})();
+const DEMO_DATASETS = [
+    {label:'Electricity (kWh)',data:[6.1,7.4,5.8,8.2,6.9,7.7,5.3],borderColor:'#fbbf24',backgroundColor:'rgba(251,191,36,.12)',fill:true},
+    {label:'Water (kL)',       data:[0.38,0.41,0.35,0.44,0.39,0.42,0.36],borderColor:'#22d3ee',backgroundColor:'rgba(34,211,238,.12)',fill:true},
+    {label:'Gas (m³)',         data:[1.2,1.5,1.1,1.7,1.4,1.6,1.3],borderColor:'#fb923c',backgroundColor:'rgba(251,146,60,.12)',fill:true},
+];
 
-let _rChart=null, _rType='line';
-async function loadChart(type){
-    try{
-        const res=await fetch(`${BASE_URL}/api/telemetry.php?action=weekly`);
-        const data=await res.json();
-        const hasReal=data.labels?.length>0&&data.datasets?.some(d=>d.data.some(v=>v>0));
-        const chartData=hasReal?data:{labels:DEMO_L,datasets:[
-            {label:'Electricity (kWh)',data:[6.1,7.4,5.8,8.2,6.9,7.7,5.3],borderColor:'#fbbf24',backgroundColor:'rgba(251,191,36,.12)',fill:true},
-            {label:'Water (kL)',data:[0.38,0.41,0.35,0.44,0.39,0.42,0.36],borderColor:'#22d3ee',backgroundColor:'rgba(34,211,238,.12)',fill:true},
-            {label:'Gas (m³)',data:[1.2,1.5,1.1,1.7,1.4,1.6,1.3],borderColor:'#fb923c',backgroundColor:'rgba(251,146,60,.12)',fill:true},
-        ]};
-        const ctx=document.getElementById('reportChart')?.getContext('2d');
-        if(!ctx)return;
-        if(_rChart)_rChart.destroy();
-        const ds=chartData.datasets.map(d=>({...d,type,tension:type==='line'?.38:0,borderWidth:type==='line'?2:0,pointRadius:type==='line'?3:0,borderRadius:type==='bar'?5:0}));
-        _rChart=new Chart(ctx,{type,data:{labels:chartData.labels,datasets:ds},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:'index',intersect:false},plugins:{legend:{position:'top',align:'end',labels:{color:'#8b9ab0',font:{size:11},boxWidth:10,padding:14,usePointStyle:true}},tooltip:{backgroundColor:'#1a2234',borderColor:'#253549',borderWidth:1,titleColor:'#f1f5f9',bodyColor:'#8b9ab0',padding:10,cornerRadius:8}},scales:{x:{ticks:{color:'#4a5568'},grid:{color:'#1e2d40'}},y:{ticks:{color:'#4a5568'},grid:{color:'#1e2d40'},beginAtZero:true}}}});
-    }catch(_){}
+let _rChart = null;
+
+function _drawChart(labels, datasets, type) {
+    const canvas = document.getElementById('reportChart');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (_rChart) { _rChart.destroy(); _rChart = null; }
+
+    const ds = datasets.map(d => Object.assign({}, d, {
+        type            : type,
+        tension         : type === 'line' ? 0.38 : 0,
+        borderWidth     : type === 'line' ? 2    : 0,
+        pointRadius     : type === 'line' ? 3    : 0,
+        pointHoverRadius: 5,
+        borderRadius    : type === 'bar'  ? 5    : 0,
+    }));
+
+    _rChart = new Chart(ctx, {
+        type : type,
+        data : { labels: labels, datasets: ds },
+        options: {
+            responsive         : true,
+            maintainAspectRatio: false,
+            interaction        : { mode: 'index', intersect: false },
+            plugins: {
+                legend: {
+                    position: 'top', align: 'end',
+                    labels  : { color: '#8b9ab0', font: { size: 11 }, boxWidth: 10, padding: 14, usePointStyle: true }
+                },
+                tooltip: {
+                    backgroundColor: '#1a2234', borderColor: '#253549', borderWidth: 1,
+                    titleColor: '#f1f5f9', bodyColor: '#8b9ab0', padding: 10, cornerRadius: 8
+                }
+            },
+            scales: {
+                x: { ticks: { color: '#4a5568' }, grid: { color: '#1e2d40' } },
+                y: { ticks: { color: '#4a5568' }, grid: { color: '#1e2d40' }, beginAtZero: true }
+            }
+        }
+    });
 }
-loadChart('line');
-document.getElementById('rLineBtn')?.addEventListener('click',()=>loadChart('line'));
-document.getElementById('rBarBtn')?.addEventListener('click',()=>loadChart('bar'));
+
+async function loadChart(type) {
+    // Show a loading placeholder
+    const wrap = document.getElementById('reportChart')?.parentElement;
+    if (wrap) wrap.style.opacity = '0.5';
+
+    let labels   = DEMO_L;
+    let datasets = DEMO_DATASETS;
+
+    try {
+        const res  = await fetch(BASE_URL + '/api/telemetry.php?action=weekly');
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const data = await res.json();
+
+        if (data.error) throw new Error(data.error);
+
+        // Check if real data exists and has non-zero values
+        const hasData = Array.isArray(data.labels)
+            && data.labels.length > 0
+            && Array.isArray(data.datasets)
+            && data.datasets.some(function(d){ return d.data && d.data.some(function(v){ return v > 0; }); });
+
+        if (hasData) {
+            labels   = data.labels;
+            datasets = data.datasets;
+        }
+    } catch (err) {
+        console.warn('[SmartHome] Chart fetch failed, using demo data:', err.message);
+    }
+
+    if (wrap) wrap.style.opacity = '1';
+    _drawChart(labels, datasets, type);
+}
+
+// Initialize on DOM ready
+document.addEventListener('DOMContentLoaded', function() {
+    loadChart('line');
+});
+
+document.getElementById('rLineBtn')?.addEventListener('click', function() { loadChart('line'); });
+document.getElementById('rBarBtn')?.addEventListener('click',  function() { loadChart('bar');  });
 
 // Budget donut
 (function(){
-    const ctx=document.getElementById('budgetDonut')?.getContext('2d');
-    if(!ctx)return;
-    const bd=<?= json_encode(array_map(fn($b)=>['label'=>ucfirst($b['resource_type']),'spent'=>(float)$b['current_spent'],'limit'=>(float)$b['monthly_limit']], $budgets?:[['resource_type'=>'electricity','current_spent'=>187.4,'monthly_limit'=>500],['resource_type'=>'water','current_spent'=>32.1,'monthly_limit'=>80],['resource_type'=>'gas','current_spent'=>54.8,'monthly_limit'=>120]])) ?>;
-    new Chart(ctx,{type:'doughnut',data:{labels:bd.map(b=>b.label),datasets:[{data:bd.map(b=>b.spent),backgroundColor:['rgba(251,191,36,.7)','rgba(34,211,238,.7)','rgba(251,146,60,.7)'],borderColor:['#fbbf24','#22d3ee','#fb923c'],borderWidth:2,hoverOffset:5}]},options:{responsive:true,maintainAspectRatio:false,cutout:'70%',plugins:{legend:{position:'bottom',labels:{color:'#8b9ab0',font:{size:11},boxWidth:10,padding:12,usePointStyle:true}},tooltip:{backgroundColor:'#1a2234',borderColor:'#253549',borderWidth:1,titleColor:'#f1f5f9',bodyColor:'#8b9ab0',padding:9,cornerRadius:8,callbacks:{label:c=>`${c.label}: ${c.parsed.toFixed(2)} EGP`}}}}});
+    var ctx = document.getElementById('budgetDonut');
+    if (!ctx) return;
+    var bd = <?= json_encode(array_map(function($b){ return ['label'=>ucfirst($b['resource_type']),'spent'=>(float)$b['current_spent'],'limit'=>(float)$b['monthly_limit']]; }, $budgets ?: [['resource_type'=>'electricity','current_spent'=>187.4,'monthly_limit'=>500],['resource_type'=>'water','current_spent'=>32.1,'monthly_limit'=>80],['resource_type'=>'gas','current_spent'=>54.8,'monthly_limit'=>120]])) ?>;
+    new Chart(ctx, {
+        type : 'doughnut',
+        data : {
+            labels  : bd.map(function(b){ return b.label; }),
+            datasets: [{
+                data           : bd.map(function(b){ return b.spent; }),
+                backgroundColor: ['rgba(251,191,36,.7)','rgba(34,211,238,.7)','rgba(251,146,60,.7)'],
+                borderColor    : ['#fbbf24','#22d3ee','#fb923c'],
+                borderWidth    : 2,
+                hoverOffset    : 5
+            }]
+        },
+        options: {
+            responsive         : true,
+            maintainAspectRatio: false,
+            cutout             : '70%',
+            plugins: {
+                legend : { position:'bottom', labels:{ color:'#8b9ab0', font:{size:10}, boxWidth:8, padding:12, usePointStyle:true }},
+                tooltip: {
+                    backgroundColor:'#1a2234', borderColor:'#253549', borderWidth:1,
+                    titleColor:'#f1f5f9', bodyColor:'#8b9ab0', padding:9, cornerRadius:8,
+                    callbacks:{ label: function(c){ return c.label+': '+c.parsed.toFixed(2)+' EGP'; }}
+                }
+            }
+        }
+    });
 })();
 </script>
